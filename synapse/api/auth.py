@@ -13,10 +13,16 @@
 # limitations under the License.
 import logging
 from typing import TYPE_CHECKING, Optional, Tuple
+from urllib.parse import urlencode
 
 import pymacaroons
+from authlib.oauth2.auth import ClientAuth
+from authlib.oauth2.rfc7662 import IntrospectionToken
+from authlib.oidc.discovery import OpenIDProviderMetadata, get_well_known_url
 from netaddr import IPAddress
 
+from twisted.web.client import readBody
+from twisted.web.http_headers import Headers
 from twisted.web.server import Request
 
 from synapse import event_auth
@@ -35,6 +41,8 @@ from synapse.http.site import SynapseRequest
 from synapse.logging.opentracing import active_span, force_tracing, start_active_span
 from synapse.storage.databases.main.registration import TokenLookupResult
 from synapse.types import Requester, StateMap, UserID, create_requester
+from synapse.util import json_decoder
+from synapse.util.caches.cached_call import RetryOnExceptionCachedCall
 from synapse.util.caches.lrucache import LruCache
 from synapse.util.macaroons import get_value_from_macaroon, satisfy_expiry
 
@@ -720,3 +728,158 @@ class Auth:
         await self._auth_blocking.check_auth_blocking(
             user_id=user_id, threepid=threepid, user_type=user_type, requester=requester
         )
+
+
+class OAuthBasedAuth(Auth):
+    def __init__(self, hs: "HomeServer"):
+        super().__init__(hs)
+
+        self._config = hs.config.auth
+        assert self._config.oauth_delegation_enabled, "OAuth delegation is not enabled"
+        assert self._config.oauth_delegation_issuer, "No issuer provided"
+        assert self._config.oauth_delegation_client_id, "No client_id provided"
+        assert self._config.oauth_delegation_client_secret, "No client_secret provided"
+
+        self._http_client = hs.get_proxied_http_client()
+        self._hostname = hs.hostname
+
+        self._issuer_metadata = RetryOnExceptionCachedCall(self._load_metadata)
+        self._client_auth = ClientAuth(
+            self._config.oauth_delegation_client_id,
+            self._config.oauth_delegation_client_secret,
+            "client_secret_post",
+        )
+
+    async def _load_metadata(self) -> OpenIDProviderMetadata:
+        url = get_well_known_url(self._config.oauth_delegation_issuer, external=True)
+        response = await self._http_client.get_json(url)
+        metadata = OpenIDProviderMetadata(**response)
+        metadata.validate_introspection_endpoint()
+        return metadata
+
+    async def _introspect_token(self, token: str) -> IntrospectionToken:
+        metadata = await self._issuer_metadata.get()
+        introspection_endpoint = metadata.get("introspection_endpoint")
+        raw_headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": self._http_client.user_agent,
+            "Accept": "application/json",
+        }
+
+        args = {"token": token, "token_type_hint": "access_token"}
+        body = urlencode(args, True)
+
+        # Fill the body/headers with credentials
+        uri, raw_headers, body = self._client_auth.prepare(
+            method="POST", uri=introspection_endpoint, headers=raw_headers, body=body
+        )
+        headers = Headers({k: [v] for (k, v) in raw_headers.items()})
+
+        # Do the actual request
+        # We're not using the SimpleHttpClient util methods as we don't want to
+        # check the HTTP status code and we do the body encoding ourself.
+        response = await self._http_client.request(
+            method="POST",
+            uri=uri,
+            data=body.encode("utf-8"),
+            headers=headers,
+        )
+
+        resp_body = await make_deferred_yieldable(readBody(response))
+        # TODO: Let's not worry about 5xx errors & co. for now and just try
+        # decoding that as JSON. We should also do some validation of the
+        # response
+        resp = json_decoder.decode(resp_body.decode("utf-8"))
+        return IntrospectionToken(**resp)
+
+    async def get_user_by_req(
+        self,
+        request: SynapseRequest,
+        allow_guest: bool = False,
+        rights: str = "access",
+        allow_expired: bool = False,
+    ) -> Requester:
+        access_token = self.get_access_token_from_request(request)
+        result = await self.get_user_by_access_token(
+            access_token, rights, allow_expired
+        )
+
+        return create_requester(
+            result.user_id,
+            access_token_id=result.token_id,
+            is_guest=result.is_guest,
+            shadow_banned=result.shadow_banned,
+            device_id=result.device_id,
+            app_service=None,
+            authenticated_entity=result.token_owner,
+        )
+
+    async def validate_appservice_can_control_user_id(
+        self, app_service: ApplicationService, user_id: str
+    ) -> None:
+        raise NotImplementedError()
+
+    async def get_user_by_access_token(
+        self,
+        token: str,
+        rights: str = "access",
+        allow_expired: bool = False,
+    ) -> TokenLookupResult:
+        introspection_result = await self._introspect_token(token)
+
+        # TODO: introspection verification should be more extensive, especially:
+        #   - verify the scopes
+        #   - verify the audience
+        if not introspection_result.get("active"):
+            raise AuthError(
+                403,
+                "Invalid access token",
+            )
+
+        # TODO: claim mapping should be configurable
+        logging.info(f"Introspection result: {introspection_result!r}")
+        username: Optional[str] = introspection_result.get("username")
+        if username is None or not isinstance(username, str):
+            raise AuthError(
+                500,
+                "Invalid username claim in the introspection result",
+            )
+
+        user_id = UserID(username, self._hostname)
+        user_info = await self.store.get_userinfo_by_id(user_id=user_id.to_string())
+
+        # If the user does not exist, we should create it on the fly
+        # TODO: we could use SCIM to provision users ahead of time and listen
+        # for SCIM SET events if those ever become standard:
+        # https://datatracker.ietf.org/doc/html/draft-hunt-scim-notify-00
+        if not user_info:
+            await self.store.register_user(user_id=user_id.to_string())
+            user_info = await self.store.get_userinfo_by_id(user_id=user_id.to_string())
+            if not user_info:
+                raise AuthError(
+                    500,
+                    "Could not create user on the fly",
+                )
+
+        return TokenLookupResult(
+            user_id=user_id.to_string(),
+            is_guest=False,
+            shadow_banned=False,
+            token_id=None,
+            device_id=None,
+            valid_until_ms=None,
+            token_owner=user_id.to_string(),
+            token_used=True,
+        )
+
+    def validate_macaroon(
+        self, macaroon: pymacaroons.Macaroon, type_string: str, user_id: str
+    ) -> None:
+        raise NotImplementedError()
+
+    def get_appservice_by_req(self, request: SynapseRequest) -> ApplicationService:
+        raise NotImplementedError()
+
+    async def is_server_admin(self, user: UserID) -> bool:
+        # This should depend on the scope of the token, not just the user
+        return False

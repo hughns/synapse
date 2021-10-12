@@ -38,7 +38,7 @@ from twisted.internet.tcp import Port
 from twisted.web.iweb import IPolicyForHTTPS
 from twisted.web.resource import Resource
 
-from synapse.api.auth import Auth
+from synapse.api.auth import Auth, OAuthBasedAuth
 from synapse.api.filtering import Filtering
 from synapse.api.ratelimiting import Ratelimiter, RequestRatelimiter
 from synapse.appservice.api import ApplicationServiceApi
@@ -388,6 +388,8 @@ class HomeServer(metaclass=abc.ABCMeta):
 
     @cache_in_self
     def get_auth(self) -> Auth:
+        if self.config.auth.oauth_delegation_enabled:
+            return OAuthBasedAuth(self)
         return Auth(self)
 
     @cache_in_self

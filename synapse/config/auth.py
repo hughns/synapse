@@ -43,6 +43,12 @@ class AuthConfig(Config):
             ui_auth.get("session_timeout", 0)
         )
 
+        oauth_delegation = config.get("oauth_delegation", {})
+        self.oauth_delegation_enabled = oauth_delegation.get("enabled", False)
+        self.oauth_delegation_issuer = oauth_delegation.get("issuer", "")
+        self.oauth_delegation_client_id = oauth_delegation.get("client_id", "")
+        self.oauth_delegation_client_secret = oauth_delegation.get("client_secret", "")
+
     def generate_config_section(self, **kwargs: Any) -> str:
         return """\
         password_config:
@@ -114,4 +120,11 @@ class AuthConfig(Config):
             # seconds.
             #
             #session_timeout: "15s"
+
+        ouath_token_delegation:
+            #enabled: true
+
+            #issuer: https://auth.example.com
+            #client_id: synapse
+            #client_secret: very-secret
         """
