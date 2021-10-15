@@ -413,6 +413,13 @@ class HomeServer(metaclass=abc.ABCMeta):
         return SimpleHttpClient(self, use_proxy=True)
 
     @cache_in_self
+    def get_proxied_tracing_http_client(self) -> SimpleHttpClient:
+        """
+        An HTTP client that uses configured HTTP(S) proxies and propagates trace contexts.
+        """
+        return SimpleHttpClient(self, use_proxy=True, propagate_tracing=True)
+
+    @cache_in_self
     def get_proxied_blacklisted_http_client(self) -> SimpleHttpClient:
         """
         An HTTP client that uses configured HTTP(S) proxies and blacklists IPs
