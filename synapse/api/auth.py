@@ -740,7 +740,7 @@ class OAuthBasedAuth(Auth):
         assert self._config.oauth_delegation_client_id, "No client_id provided"
         assert self._config.oauth_delegation_client_secret, "No client_secret provided"
 
-        self._http_client = hs.get_proxied_http_client()
+        self._http_client = hs.get_proxied_tracing_http_client()
         self._hostname = hs.hostname
 
         self._issuer_metadata = RetryOnExceptionCachedCall(self._load_metadata)
