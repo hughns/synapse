@@ -75,7 +75,7 @@ from synapse.http import QuieterFileBodyProducer, RequestTimedOutError, redact_u
 from synapse.http.proxyagent import ProxyAgent
 from synapse.http.types import QueryParams
 from synapse.logging.context import make_deferred_yieldable
-from synapse.logging.opentracing import set_tag, start_active_span, tags
+from synapse.logging.opentracing import set_tag, start_active_span, tags, inject_request_headers
 from synapse.types import ISynapseReactor
 from synapse.util import json_decoder
 from synapse.util.async_helpers import timeout_deferred
@@ -305,6 +305,7 @@ class SimpleHttpClient:
         ip_whitelist: Optional[IPSet] = None,
         ip_blacklist: Optional[IPSet] = None,
         use_proxy: bool = False,
+        propagate_tracing: bool = False,
     ):
         """
         Args:
@@ -322,6 +323,7 @@ class SimpleHttpClient:
         self._ip_whitelist = ip_whitelist
         self._ip_blacklist = ip_blacklist
         self._extra_treq_args = treq_args or {}
+        self._propagate_tracing = propagate_tracing
         self.clock = hs.get_clock()
 
         user_agent = hs.version_string
@@ -416,6 +418,11 @@ class SimpleHttpClient:
                         BytesIO(data),
                         cooperator=self._cooperator,
                     )
+
+                if self._propagate_tracing:
+                    if headers is None:
+                        headers = Headers()
+                    inject_request_headers(headers)
 
                 request_deferred: defer.Deferred = treq.request(
                     method,

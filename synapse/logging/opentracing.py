@@ -676,6 +676,17 @@ def inject_header_dict(
         headers[key.encode()] = [value.encode()]
 
 
+def inject_request_headers(request_headers: Headers) -> None:
+    """Injects a span context into the HTTP request headers"""
+    span = opentracing.tracer.active_span
+
+    carrier: Dict[str, str] = {}
+    opentracing.tracer.inject(span.context, opentracing.Format.HTTP_HEADERS, carrier)
+
+    for key, value in carrier.items():
+        request_headers.addRawHeader(key, value)
+
+
 def inject_response_headers(response_headers: Headers) -> None:
     """Inject the current trace id into the HTTP response headers"""
     if not opentracing:
