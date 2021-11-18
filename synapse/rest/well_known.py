@@ -44,6 +44,11 @@ class WellKnownBuilder:
                 "base_url": self._config.registration.default_identity_server
             }
 
+        if self._config.auth.oauth_delegation_enabled:
+            result["m.authentication"] = {
+                "issuer": self._config.auth.oauth_delegation_issuer
+            }
+
         return result
 
 
