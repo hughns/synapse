@@ -14,6 +14,7 @@
 import logging
 from typing import TYPE_CHECKING, Optional, Tuple
 from urllib.parse import urlencode
+from authlib.oauth2.rfc6749.util import scope_to_list
 
 import pymacaroons
 from authlib.oauth2.auth import ClientAuth
@@ -33,6 +34,7 @@ from synapse.api.errors import (
     Codes,
     InvalidClientTokenError,
     MissingClientTokenError,
+    StoreError,
 )
 from synapse.appservice import ApplicationService
 from synapse.events import EventBase
@@ -754,7 +756,7 @@ class OAuthBasedAuth(Auth):
         url = get_well_known_url(self._config.oauth_delegation_issuer, external=True)
         response = await self._http_client.get_json(url)
         metadata = OpenIDProviderMetadata(**response)
-        metadata.validate_introspection_endpoint()
+        # metadata.validate_introspection_endpoint()
         return metadata
 
     async def _introspect_token(self, token: str) -> IntrospectionToken:
@@ -845,6 +847,17 @@ class OAuthBasedAuth(Auth):
                 "Invalid username claim in the introspection result",
             )
 
+        # Let's look at the scope
+        scope: Optional[List[str]] = scope_to_list(introspection_result.get("scope"))
+        device_id = None
+        if scope:
+            # Find device_id in scope
+            for tok in scope:
+                if tok.startswith("urn:matrix:device:"):
+                    parts = tok.split(":")
+                    if len(parts) == 4:
+                        device_id = parts[3]
+
         user_id = UserID(username, self._hostname)
         user_info = await self.store.get_userinfo_by_id(user_id=user_id.to_string())
 
@@ -861,12 +874,19 @@ class OAuthBasedAuth(Auth):
                     "Could not create user on the fly",
                 )
 
+        if device_id:
+            # Create the device on the fly if it does not exist
+            try:
+                await self.store.get_device(user_id=user_id.to_string(), device_id=device_id)
+            except StoreError:
+                await self.store.store_device(user_id=user_id.to_string(), device_id=device_id, initial_device_display_name="OIDC-native client")
+
         return TokenLookupResult(
             user_id=user_id.to_string(),
             is_guest=False,
             shadow_banned=False,
             token_id=None,
-            device_id=None,
+            device_id=device_id,
             valid_until_ms=None,
             token_owner=user_id.to_string(),
             token_used=True,
