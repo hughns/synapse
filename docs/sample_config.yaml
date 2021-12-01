@@ -1826,6 +1826,10 @@ saml2_config:
 #   jwks_uri: URI where to fetch the JWKS. Required if discovery is disabled and
 #       the 'openid' scope is used.
 #
+#   backchannel_logout_enabled: set to 'true' to automatically logout
+#       the user when the session ends on the IdP side. Defaults to
+#       false. Requires support for OIDC Back-Channel Logout.
+#
 #   skip_verification: set to 'true' to skip metadata verification. Use this if
 #       you are connecting to a provider that is not OpenID Connect compliant.
 #       Defaults to false. Avoid this in production.
@@ -1923,6 +1927,7 @@ oidc_providers:
   #  token_endpoint: "https://accounts.example.com/oauth2/token"
   #  userinfo_endpoint: "https://accounts.example.com/userinfo"
   #  jwks_uri: "https://accounts.example.com/.well-known/jwks.json"
+  #  backchannel_logout_enabled: true
   #  skip_verification: true
   #  user_mapping_provider:
   #    config:

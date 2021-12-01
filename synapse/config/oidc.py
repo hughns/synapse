@@ -143,6 +143,10 @@ class OIDCConfig(Config):
         #   jwks_uri: URI where to fetch the JWKS. Required if discovery is disabled and
         #       the 'openid' scope is used.
         #
+        #   backchannel_logout_enabled: set to 'true' to automatically logout
+        #       the user when the session ends on the IdP side. Defaults to
+        #       false. Requires support for OIDC Back-Channel Logout.
+        #
         #   skip_verification: set to 'true' to skip metadata verification. Use this if
         #       you are connecting to a provider that is not OpenID Connect compliant.
         #       Defaults to false. Avoid this in production.
@@ -240,6 +244,7 @@ class OIDCConfig(Config):
           #  token_endpoint: "https://accounts.example.com/oauth2/token"
           #  userinfo_endpoint: "https://accounts.example.com/userinfo"
           #  jwks_uri: "https://accounts.example.com/.well-known/jwks.json"
+          #  backchannel_logout_enabled: true
           #  skip_verification: true
           #  user_mapping_provider:
           #    config:
@@ -316,6 +321,7 @@ OIDC_PROVIDER_CONFIG_SCHEMA = {
         "userinfo_endpoint": {"type": "string"},
         "jwks_uri": {"type": "string"},
         "skip_verification": {"type": "boolean"},
+        "backchannel_logout_enabled": {"type": "boolean"},
         "user_profile_method": {
             "type": "string",
             "enum": ["auto", "userinfo_endpoint"],
@@ -486,6 +492,7 @@ def _parse_oidc_config_dict(
         token_endpoint=oidc_config.get("token_endpoint"),
         userinfo_endpoint=oidc_config.get("userinfo_endpoint"),
         jwks_uri=oidc_config.get("jwks_uri"),
+        backchannel_logout_enabled=oidc_config.get("backchannel_logout_enabled", False),
         skip_verification=oidc_config.get("skip_verification", False),
         user_profile_method=oidc_config.get("user_profile_method", "auto"),
         allow_existing_users=oidc_config.get("allow_existing_users", False),
@@ -561,6 +568,9 @@ class OidcProviderConfig:
     # URI where to fetch the JWKS. Required if discovery is disabled and the
     # "openid" scope is used.
     jwks_uri: Optional[str]
+
+    # Whether Synapse should react to backchannel logouts
+    backchannel_logout_enabled: bool
 
     # Whether to skip metadata verification
     skip_verification: bool
