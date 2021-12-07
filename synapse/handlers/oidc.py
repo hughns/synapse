@@ -12,18 +12,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import binascii
 import inspect
-import json
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Generic, List, Optional, TypeVar, Union
 from urllib.parse import urlencode, urlparse
 
 import attr
+import jwt
 import pymacaroons
-import unpaddedbase64
 from authlib.common.security import generate_token
-from authlib.jose import JsonWebToken, JWTClaims, jwt
+from authlib.jose import JsonWebToken, JWTClaims
 from authlib.jose.errors import InvalidClaimError, MissingClaimError
 from authlib.oauth2.auth import ClientAuth
 from authlib.oauth2.rfc6749.parameters import prepare_grant_uri
@@ -261,8 +259,9 @@ class OidcHandler:
         with the issuer and the aud claim with the client_id.
 
         Since at this point we don't know who signed the JWT, we can't just
-        decode it automatically, we have to manually parse the JWT to extract
-        both claims.
+        decode it using authlib since it will always verifies the signature. We
+        have to decode it without validating the signature, which can be done
+        using PyJWT.
 
         Args:
             request: the incoming request from the browser.
@@ -271,25 +270,11 @@ class OidcHandler:
         if logout_token is None:
             raise SynapseError(400, "Missing logout_token in request")
 
-        # A JWT looks like this:
-        #    header.payload.signature
-        # where all parts are encoded with urlsafe base64.
-        # The aud and iss claims we care about are in the payload part, which
-        # is a JSON object.
-        try:
-            # This raises if there are too many or not enough segments in the token
-            header, payload, signature = logout_token.rsplit(".", 4)
-        except ValueError:
-            raise SynapseError(400, "Invalid logout_token in request")
+        # Decode the JWT without checking its signature
+        claims = jwt.decode(logout_token, options={"verify_signature": False})
 
         try:
-            payload_bytes = unpaddedbase64.decode_base64(payload)
-            claims = json.loads(payload_bytes)
-        except (json.JSONDecodeError, binascii.Error):
-            raise SynapseError(400, "Invalid logout_token payload in request")
-
-        try:
-            # Let's extract the iss and aud claim
+            # Let's extract the iss and aud claims
             iss = claims["iss"]
             aud = claims["aud"]
             # The aud claim can be either a string or a list of string. Here we
@@ -298,15 +283,16 @@ class OidcHandler:
                 aud = [aud]
 
             # Check that we have the right types for the aud and the iss claims
-            assert isinstance(iss, str)
-            assert isinstance(aud, list)
+            if not isinstance(iss, str) or not isinstance(aud, list):
+                raise TypeError()
             for a in aud:
-                assert isinstance(a, str)
+                if not isinstance(a, str):
+                    raise TypeError()
 
             # At this point we properly checked both claims types
             issuer: str = iss
             audience: List[str] = aud
-        except (TypeError, KeyError, AssertionError):
+        except (TypeError, KeyError):
             raise SynapseError(400, "Invalid issuer/audience in logout_token")
 
         # Now that we know the audience and the issuer, we can figure out from
@@ -1363,6 +1349,7 @@ class JwtClientSecret:
         logger.info(
             "Generating new JWT for %s: %s %s", self._oauth_issuer, header, payload
         )
+        jwt = JsonWebToken()
         self._cached_secret = jwt.encode(header, payload, self._key.key)
         self._cached_secret_replacement_time = (
             expires_at - CLIENT_SECRET_MIN_VALIDITY_SECONDS
