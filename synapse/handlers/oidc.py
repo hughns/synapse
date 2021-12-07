@@ -256,9 +256,9 @@ class OidcHandler:
     async def handle_backchannel_logout(self, request: SynapseRequest) -> None:
         """Handle an incoming request to /_synapse/client/oidc/backchannel_logout
 
-        This extracts the logout_token from the request and try to figure out
-        from whom it is coming from. This works by matching the iss claim with
-        the issuer and the aud claim with the client_id.
+        This extracts the logout_token from the request and tries to figure out
+        which account it is associated with. This works by matching the iss claim
+        with the issuer and the aud claim with the client_id.
 
         Since at this point we don't know who signed the JWT, we can't just
         decode it automatically, we have to manually parse the JWT to extract
@@ -322,7 +322,7 @@ class OidcHandler:
         if oidc_provider is None:
             raise SynapseError(400, "Could not find the OP that issued this event")
 
-        # We now figured out what provider should handle the logout request
+        # Ask the provider to handle the logout request.
         await oidc_provider.handle_backchannel_logout(request, logout_token)
 
 
@@ -1223,7 +1223,7 @@ class OidcProvider:
         # point the `sid` claim exists and is a string.
         sid: str = claims.get("sid")
 
-        # Find in the store if we have a device associated with that SID
+        # Fetch any device(s) in the store associated with the session ID.
         devices = await self._store.get_devices_by_auth_provider_session_id(
             auth_provider_id=self.idp_id,
             auth_provider_session_id=sid,
@@ -1255,7 +1255,7 @@ class LogoutToken(JWTClaims):
 
     def validate(self, now: Optional[int] = None, leeway: int = 0) -> None:
         """Validate everything in claims payload."""
-        super(LogoutToken, self).validate(now, leeway)
+        super().validate(now, leeway)
         self.validate_sid()
         self.validate_events()
         self.validate_nonce()
@@ -1283,7 +1283,7 @@ class LogoutToken(JWTClaims):
             raise InvalidClaimError("nonce")
 
     def validate_events(self) -> None:
-        """Ensure the events is present and with the right value"""
+        """Ensure the events claim is present and with the right value"""
         events = self.get("events")
         if not events:
             raise MissingClaimError("events")
