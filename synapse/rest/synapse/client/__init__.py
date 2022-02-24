@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Mapping
 
 from twisted.web.resource import Resource
 
+from synapse.rest.synapse.client.jwks import JwksResource
 from synapse.rest.synapse.client.new_user_consent import NewUserConsentResource
 from synapse.rest.synapse.client.pick_idp import PickIdpResource
 from synapse.rest.synapse.client.pick_username import pick_username_resource
@@ -41,6 +42,7 @@ def build_synapse_client_resource_tree(hs: "HomeServer") -> Mapping[str, Resourc
         "/_synapse/client/pick_username": pick_username_resource(hs),
         "/_synapse/client/new_user_consent": NewUserConsentResource(hs),
         "/_synapse/client/sso_register": SsoRegisterResource(hs),
+        "/_synapse/jwks": JwksResource(hs),
     }
 
     # provider-specific SSO bits. Only load these if they are enabled, since they

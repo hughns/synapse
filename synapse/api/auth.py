@@ -17,7 +17,8 @@ from urllib.parse import urlencode
 from authlib.oauth2.rfc6749.util import scope_to_list
 
 import pymacaroons
-from authlib.oauth2.auth import ClientAuth
+from authlib.oauth2.auth import ClientAuth, encode_client_secret_basic, encode_client_secret_post
+from authlib.oauth2.rfc7523.auth import PrivateKeyJWT, ClientSecretJWT
 from authlib.oauth2.rfc7662 import IntrospectionToken
 from authlib.oidc.discovery import OpenIDProviderMetadata, get_well_known_url
 from netaddr import IPAddress
@@ -734,6 +735,13 @@ class Auth:
 
 
 class OAuthBasedAuth(Auth):
+    AUTH_METHODS = {
+        'client_secret_post': lambda _: encode_client_secret_post,
+        'client_secret_basic': lambda _: encode_client_secret_basic,
+        'client_secret_jwt': lambda _: ClientSecretJWT(),
+        'private_key_jwt': lambda key: PrivateKeyJWT(header={"kid": key["kid"]}),
+    }
+
     def __init__(self, hs: "HomeServer"):
         super().__init__(hs)
 
@@ -742,15 +750,17 @@ class OAuthBasedAuth(Auth):
         assert self._config.oauth_delegation_issuer, "No issuer provided"
         assert self._config.oauth_delegation_client_id, "No client_id provided"
         assert self._config.oauth_delegation_client_secret, "No client_secret provided"
+        assert self._config.oauth_delegation_client_auth_method in OAuthBasedAuth.AUTH_METHODS, "Invalid client_auth_method"
 
         self._http_client = hs.get_proxied_tracing_http_client()
         self._hostname = hs.hostname
 
         self._issuer_metadata = RetryOnExceptionCachedCall(self._load_metadata)
+        secret = self._config.oauth_delegation_client_secret
         self._client_auth = ClientAuth(
             self._config.oauth_delegation_client_id,
-            self._config.oauth_delegation_client_secret,
-            "client_secret_post",
+            secret,
+            OAuthBasedAuth.AUTH_METHODS[self._config.oauth_delegation_client_auth_method](secret),
         )
 
     async def _load_metadata(self) -> OpenIDProviderMetadata:
@@ -830,6 +840,8 @@ class OAuthBasedAuth(Auth):
     ) -> TokenLookupResult:
         introspection_result = await self._introspect_token(token)
 
+        logging.info(f"Introspection result: {introspection_result!r}")
+
         # TODO: introspection verification should be more extensive, especially:
         #   - verify the scopes
         #   - verify the audience
@@ -840,7 +852,6 @@ class OAuthBasedAuth(Auth):
             )
 
         # TODO: claim mapping should be configurable
-        logging.info(f"Introspection result: {introspection_result!r}")
         username: Optional[str] = introspection_result.get("username")
         if username is None or not isinstance(username, str):
             raise AuthError(
