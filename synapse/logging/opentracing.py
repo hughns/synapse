@@ -676,6 +676,7 @@ def inject_header_dict(
         headers[key.encode()] = [value.encode()]
 
 
+@only_if_tracing
 def inject_request_headers(request_headers: Headers) -> None:
     """Injects a span context into the HTTP request headers"""
     span = opentracing.tracer.active_span
