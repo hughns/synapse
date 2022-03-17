@@ -14,11 +14,16 @@
 import logging
 from typing import TYPE_CHECKING, Optional, Tuple
 from urllib.parse import urlencode
-from authlib.oauth2.rfc6749.util import scope_to_list
 
 import pymacaroons
-from authlib.oauth2.auth import ClientAuth, encode_client_secret_basic, encode_client_secret_post
-from authlib.oauth2.rfc7523.auth import PrivateKeyJWT, ClientSecretJWT
+from authlib.oauth2.auth import (
+    ClientAuth,
+    encode_client_secret_basic,
+    encode_client_secret_post,
+)
+from authlib.oauth2.rfc6749.util import scope_to_list
+from authlib.oauth2.rfc7523.assertion import private_key_jwt_sign
+from authlib.oauth2.rfc7523.auth import ClientSecretJWT, PrivateKeyJWT
 from authlib.oauth2.rfc7662 import IntrospectionToken
 from authlib.oidc.discovery import OpenIDProviderMetadata, get_well_known_url
 from netaddr import IPAddress
@@ -734,12 +739,23 @@ class Auth:
         )
 
 
+class PrivateKeyJWTWithKid(PrivateKeyJWT):
+    def sign(self, auth, token_endpoint):
+        return private_key_jwt_sign(
+            auth.client_secret,
+            client_id=auth.client_id,
+            token_endpoint=token_endpoint,
+            claims=self.claims,
+            header={"kid": auth.client_secret["kid"]},
+        )
+
+
 class OAuthBasedAuth(Auth):
     AUTH_METHODS = {
-        'client_secret_post': lambda _: encode_client_secret_post,
-        'client_secret_basic': lambda _: encode_client_secret_basic,
-        'client_secret_jwt': lambda _: ClientSecretJWT(),
-        'private_key_jwt': lambda key: PrivateKeyJWT(header={"kid": key["kid"]}),
+        "client_secret_post": encode_client_secret_post,
+        "client_secret_basic": encode_client_secret_basic,
+        "client_secret_jwt": ClientSecretJWT(),
+        "private_key_jwt": PrivateKeyJWTWithKid(),
     }
 
     def __init__(self, hs: "HomeServer"):
@@ -750,7 +766,10 @@ class OAuthBasedAuth(Auth):
         assert self._config.oauth_delegation_issuer, "No issuer provided"
         assert self._config.oauth_delegation_client_id, "No client_id provided"
         assert self._config.oauth_delegation_client_secret, "No client_secret provided"
-        assert self._config.oauth_delegation_client_auth_method in OAuthBasedAuth.AUTH_METHODS, "Invalid client_auth_method"
+        assert (
+            self._config.oauth_delegation_client_auth_method
+            in OAuthBasedAuth.AUTH_METHODS
+        ), "Invalid client_auth_method"
 
         self._http_client = hs.get_proxied_tracing_http_client()
         self._hostname = hs.hostname
@@ -760,7 +779,9 @@ class OAuthBasedAuth(Auth):
         self._client_auth = ClientAuth(
             self._config.oauth_delegation_client_id,
             secret,
-            OAuthBasedAuth.AUTH_METHODS[self._config.oauth_delegation_client_auth_method](secret),
+            OAuthBasedAuth.AUTH_METHODS[
+                self._config.oauth_delegation_client_auth_method
+            ],
         )
 
     async def _load_metadata(self) -> OpenIDProviderMetadata:
@@ -889,9 +910,15 @@ class OAuthBasedAuth(Auth):
         if device_id:
             # Create the device on the fly if it does not exist
             try:
-                await self.store.get_device(user_id=user_id.to_string(), device_id=device_id)
+                await self.store.get_device(
+                    user_id=user_id.to_string(), device_id=device_id
+                )
             except StoreError:
-                await self.store.store_device(user_id=user_id.to_string(), device_id=device_id, initial_device_display_name="OIDC-native client")
+                await self.store.store_device(
+                    user_id=user_id.to_string(),
+                    device_id=device_id,
+                    initial_device_display_name="OIDC-native client",
+                )
 
         return TokenLookupResult(
             user_id=user_id.to_string(),

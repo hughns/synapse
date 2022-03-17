@@ -31,15 +31,33 @@ class JwksResource(DirectServeJsonResource):
         super().__init__(extract_context=True)
 
         # List here: https://www.iana.org/assignments/jose/jose.xhtml#web-key-parameters
-        public_parameters = {"kty", "use", "key_ops", "alg", "kid", "x5u",
-                             "x5c", "x5t", "x5t#S256", "crv", "x", "y", "n",
-                             "e", "crv", "x", "ext"}
+        public_parameters = {
+            "kty",
+            "use",
+            "key_ops",
+            "alg",
+            "kid",
+            "x5u",
+            "x5c",
+            "x5t",
+            "x5t#S256",
+            "crv",
+            "x",
+            "y",
+            "n",
+            "e",
+            "crv",
+            "x",
+            "ext",
+        }
 
         secret = hs.config.auth.oauth_delegation_client_secret
 
         if isinstance(secret, Key):
             private_key = secret.as_dict()
-            public_key = {k: v for k, v in private_key.items() if k in public_parameters}
+            public_key = {
+                k: v for k, v in private_key.items() if k in public_parameters
+            }
             keys = [public_key]
         else:
             keys = []

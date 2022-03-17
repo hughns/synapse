@@ -16,8 +16,9 @@ from typing import Any
 
 from synapse.types import JsonDict
 
-from ._base import Config
 from authlib.jose.rfc7517 import JsonWebKey
+
+from ._base import Config
 
 
 class AuthConfig(Config):
@@ -49,10 +50,14 @@ class AuthConfig(Config):
         self.oauth_delegation_issuer = oauth_delegation.get("issuer", "")
         self.oauth_delegation_client_id = oauth_delegation.get("client_id", "")
         self.oauth_delegation_client_secret = oauth_delegation.get("client_secret", "")
-        self.oauth_delegation_client_auth_method = oauth_delegation.get("client_auth_method", "client_secret_post")
+        self.oauth_delegation_client_auth_method = oauth_delegation.get(
+            "client_auth_method", "client_secret_post"
+        )
 
         if self.oauth_delegation_client_auth_method == "private_key_jwt":
-            self.oauth_delegation_client_secret = JsonWebKey.import_key(self.oauth_delegation_client_secret)
+            self.oauth_delegation_client_secret = JsonWebKey.import_key(
+                self.oauth_delegation_client_secret
+            )
 
     def generate_config_section(self, **kwargs: Any) -> str:
         return """\

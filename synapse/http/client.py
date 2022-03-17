@@ -73,7 +73,12 @@ from synapse.http import QuieterFileBodyProducer, RequestTimedOutError, redact_u
 from synapse.http.proxyagent import ProxyAgent
 from synapse.http.types import QueryParams
 from synapse.logging.context import make_deferred_yieldable
-from synapse.logging.opentracing import set_tag, start_active_span, tags, inject_request_headers
+from synapse.logging.opentracing import (
+    inject_request_headers,
+    set_tag,
+    start_active_span,
+    tags,
+)
 from synapse.types import ISynapseReactor
 from synapse.util import json_decoder
 from synapse.util.async_helpers import timeout_deferred
