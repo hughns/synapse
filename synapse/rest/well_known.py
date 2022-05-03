@@ -49,6 +49,9 @@ class WellKnownBuilder:
                 "issuer": self._config.auth.oauth_delegation_issuer
             }
 
+            if (self._config.auth.oauth_delegation_account != ""):
+                result["m.authentication"].account = self._config.auth.oauth_delegation_account
+
         return result
 
 

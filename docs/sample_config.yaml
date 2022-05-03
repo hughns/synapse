@@ -2252,6 +2252,7 @@ ouath_token_delegation:
     #enabled: true
 
     #issuer: https://auth.example.com
+    #account: https://auth.example.com/myaccount
     #client_id: synapse
     #client_secret: very-secret
 

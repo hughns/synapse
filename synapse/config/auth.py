@@ -48,6 +48,7 @@ class AuthConfig(Config):
         oauth_delegation = config.get("oauth_delegation", {})
         self.oauth_delegation_enabled = oauth_delegation.get("enabled", False)
         self.oauth_delegation_issuer = oauth_delegation.get("issuer", "")
+        self.oauth_delegation_account = oauth_delegation.get("account", "")
         self.oauth_delegation_client_id = oauth_delegation.get("client_id", "")
         self.oauth_delegation_client_secret = oauth_delegation.get("client_secret", "")
         self.oauth_delegation_client_auth_method = oauth_delegation.get(
@@ -135,6 +136,7 @@ class AuthConfig(Config):
             #enabled: true
 
             #issuer: https://auth.example.com
+            #account: https://auth.example.com/myaccount
             #client_id: synapse
             #client_secret: very-secret
             #client_auth_method: client_secret_post
