@@ -132,7 +132,7 @@ class AuthConfig(Config):
             #
             #session_timeout: "15s"
 
-        ouath_token_delegation:
+        oauth_token_delegation:
             #enabled: true
 
             #issuer: https://auth.example.com
