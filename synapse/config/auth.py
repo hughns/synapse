@@ -18,7 +18,7 @@ from synapse.types import JsonDict
 
 from authlib.jose.rfc7517 import JsonWebKey
 
-from ._base import Config
+from ._base import Config, ConfigError
 
 
 class AuthConfig(Config):
@@ -31,7 +31,6 @@ class AuthConfig(Config):
         if password_config is None:
             password_config = {}
 
-        self.password_enabled = password_config.get("enabled", True)
         self.password_localdb_enabled = password_config.get("localdb_enabled", True)
         self.password_pepper = password_config.get("pepper", "")
 
@@ -55,9 +54,17 @@ class AuthConfig(Config):
             "client_auth_method", "client_secret_post"
         )
 
+        self.password_enabled = password_config.get("enabled", not self.oauth_delegation_enabled)
+
         if self.oauth_delegation_client_auth_method == "private_key_jwt":
             self.oauth_delegation_client_secret = JsonWebKey.import_key(
                 self.oauth_delegation_client_secret
+            )
+
+        # If we are delegating via OAuth then password cannot be supported as well
+        if self.oauth_delegation_enabled and self.password_enabled:
+            raise ConfigError(
+                "Password auth cannot be enabled when OAuth delegation is enabled"
             )
 
     def generate_config_section(self, **kwargs: Any) -> str:
