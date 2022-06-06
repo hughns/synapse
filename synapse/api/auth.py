@@ -788,6 +788,8 @@ class OAuthBasedAuth(Auth):
         )
 
     async def _load_metadata(self) -> OpenIDProviderMetadata:
+        if self._config.oauth_delegation_issuer_metadata is not None:
+            return OpenIDProviderMetadata(**self._config.oauth_delegation_issuer_metadata)
         url = get_well_known_url(self._config.oauth_delegation_issuer, external=True)
         response = await self._http_client.get_json(url)
         metadata = OpenIDProviderMetadata(**response)

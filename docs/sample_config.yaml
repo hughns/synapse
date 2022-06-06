@@ -2293,6 +2293,7 @@ ouath_token_delegation:
     #issuer: https://auth.example.com
     #client_id: synapse
     #client_secret: very-secret
+    #client_auth_method: client_secret_post
 
 
 # Configuration for sending emails from Synapse.

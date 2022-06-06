@@ -59,6 +59,7 @@ class AuthConfig(Config):
         oauth_delegation = config.get("oauth_delegation", {})
         self.oauth_delegation_enabled = oauth_delegation.get("enabled", False)
         self.oauth_delegation_issuer = oauth_delegation.get("issuer", "")
+        self.oauth_delegation_issuer_metadata = oauth_delegation.get("issuer_metadata")
         self.oauth_delegation_client_id = oauth_delegation.get("client_id", "")
         self.oauth_delegation_client_secret = oauth_delegation.get("client_secret", "")
         self.oauth_delegation_client_auth_method = oauth_delegation.get(
