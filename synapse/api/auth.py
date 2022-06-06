@@ -204,7 +204,7 @@ class Auth:
         Once get_user_by_req has set up the opentracing span, this does the actual work.
         """
         try:
-            ip_addr = request.getClientIP()
+            ip_addr = request.getClientAddress().host
             user_agent = get_request_user_agent(request)
 
             access_token = self.get_access_token_from_request(request)
@@ -373,7 +373,7 @@ class Auth:
             return None, None, None
 
         if app_service.ip_range_whitelist:
-            ip_address = IPAddress(request.getClientIP())
+            ip_address = IPAddress(request.getClientAddress().host)
             if ip_address not in app_service.ip_range_whitelist:
                 return None, None, None
 
@@ -434,7 +434,8 @@ class Auth:
         """
 
         if rights == "access":
-            # first look in the database
+            # First look in the database to see if the access token is present
+            # as an opaque token.
             r = await self.store.get_user_by_access_token(token)
             if r:
                 valid_until_ms = r.valid_until_ms
@@ -451,7 +452,8 @@ class Auth:
 
                 return r
 
-        # otherwise it needs to be a valid macaroon
+        # If the token isn't found in the database, then it could still be a
+        # macaroon, so we check that here.
         try:
             user_id, guest = self._parse_and_validate_macaroon(token, rights)
 
@@ -499,8 +501,12 @@ class Auth:
             TypeError,
             ValueError,
         ) as e:
-            logger.warning("Invalid macaroon in auth: %s %s", type(e), e)
-            raise InvalidClientTokenError("Invalid macaroon passed.")
+            logger.warning(
+                "Invalid access token in auth: %s %s.",
+                type(e),
+                e,
+            )
+            raise InvalidClientTokenError("Invalid access token passed.")
 
     def _parse_and_validate_macaroon(
         self, token: str, rights: str = "access"
@@ -521,10 +527,7 @@ class Auth:
         try:
             macaroon = pymacaroons.Macaroon.deserialize(token)
         except Exception:  # deserialize can throw more-or-less anything
-            # doesn't look like a macaroon: treat it as an opaque token which
-            # must be in the database.
-            # TODO: it would be nice to get rid of this, but apparently some
-            # people use access tokens which aren't macaroons
+            # The access token doesn't look like a macaroon.
             raise _InvalidMacaroonException()
 
         try:
@@ -785,6 +788,8 @@ class OAuthBasedAuth(Auth):
         )
 
     async def _load_metadata(self) -> OpenIDProviderMetadata:
+        if self._config.oauth_delegation_issuer_metadata is not None:
+            return OpenIDProviderMetadata(**self._config.oauth_delegation_issuer_metadata)
         url = get_well_known_url(self._config.oauth_delegation_issuer, external=True)
         response = await self._http_client.get_json(url)
         metadata = OpenIDProviderMetadata(**response)

@@ -26,16 +26,13 @@ class ExperimentalConfig(Config):
     def read_config(self, config: JsonDict, **kwargs: Any) -> None:
         experimental = config.get("experimental_features") or {}
 
-        # MSC3440 (thread relation)
-        self.msc3440_enabled: bool = experimental.get("msc3440_enabled", False)
-
         # MSC3026 (busy presence state)
         self.msc3026_enabled: bool = experimental.get("msc3026_enabled", False)
 
         # MSC2716 (importing historical messages)
         self.msc2716_enabled: bool = experimental.get("msc2716_enabled", False)
 
-        # MSC2285 (hidden read receipts)
+        # MSC2285 (private read receipts)
         self.msc2285_enabled: bool = experimental.get("msc2285_enabled", False)
 
         # MSC3244 (room version capabilities)
@@ -77,7 +74,13 @@ class ExperimentalConfig(Config):
         self.msc3720_enabled: bool = experimental.get("msc3720_enabled", False)
 
         # The deprecated groups feature.
-        self.groups_enabled: bool = experimental.get("groups_enabled", True)
+        self.groups_enabled: bool = experimental.get("groups_enabled", False)
 
         # MSC2654: Unread counts
         self.msc2654_enabled: bool = experimental.get("msc2654_enabled", False)
+
+        # MSC2815 (allow room moderators to view redacted event content)
+        self.msc2815_enabled: bool = experimental.get("msc2815_enabled", False)
+
+        # MSC3786 (Add a default push rule to ignore m.room.server_acl events)
+        self.msc3786_enabled: bool = experimental.get("msc3786_enabled", False)

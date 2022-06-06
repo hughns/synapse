@@ -87,6 +87,18 @@ rc_joins:
     per_second: 9999
     burst_count: 9999
 
+rc_3pid_validation:
+  per_second: 1000
+  burst_count: 1000
+
+rc_invites:
+  per_room:
+    per_second: 1000
+    burst_count: 1000
+  per_user:
+    per_second: 1000
+    burst_count: 1000
+
 federation_rr_transactions_per_room_per_second: 9999
 
 ## API Configuration ##
@@ -103,8 +115,10 @@ experimental_features:
   spaces_enabled: true
   # Enable history backfilling support
   msc2716_enabled: true
-  # server-side support for partial state in /send_join
+  # server-side support for partial state in /send_join responses
   msc3706_enabled: true
+  # client-side support for partial state in /send_join responses
+  faster_joins: true
   # Enable jump to date endpoint
   msc3030_enabled: true
 

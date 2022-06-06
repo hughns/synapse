@@ -25,6 +25,7 @@ from typing import (
     Optional,
     Set,
     Tuple,
+    cast,
 )
 
 from synapse.api.errors import Codes, StoreError
@@ -136,7 +137,9 @@ class DeviceWorkerStore(SQLBaseStore):
             Number of devices of this users.
         """
 
-        def count_devices_by_users_txn(txn, user_ids):
+        def count_devices_by_users_txn(
+            txn: LoggingTransaction, user_ids: List[str]
+        ) -> int:
             sql = """
                 SELECT count(*)
                 FROM devices
@@ -149,7 +152,7 @@ class DeviceWorkerStore(SQLBaseStore):
             )
 
             txn.execute(sql + clause, args)
-            return txn.fetchone()[0]
+            return cast(Tuple[int], txn.fetchone())[0]
 
         if not user_ids:
             return 0
@@ -468,7 +471,7 @@ class DeviceWorkerStore(SQLBaseStore):
         """
         txn.execute(sql, (destination, from_stream_id, now_stream_id, limit))
 
-        return list(txn)
+        return cast(List[Tuple[str, str, int, Optional[str]]], txn.fetchall())
 
     async def _get_device_update_edus_by_remote(
         self,
@@ -549,7 +552,7 @@ class DeviceWorkerStore(SQLBaseStore):
     async def _get_last_device_update_for_remote_user(
         self, destination: str, user_id: str, from_stream_id: int
     ) -> int:
-        def f(txn):
+        def f(txn: LoggingTransaction) -> int:
             prev_sent_id_sql = """
                 SELECT coalesce(max(stream_id), 0) as stream_id
                 FROM device_lists_outbound_last_success
@@ -767,7 +770,7 @@ class DeviceWorkerStore(SQLBaseStore):
         if not user_ids_to_check:
             return set()
 
-        def _get_users_whose_devices_changed_txn(txn):
+        def _get_users_whose_devices_changed_txn(txn: LoggingTransaction) -> Set[str]:
             changes = set()
 
             stream_id_where_clause = "stream_id > ?"
@@ -966,7 +969,9 @@ class DeviceWorkerStore(SQLBaseStore):
     async def mark_remote_user_device_list_as_unsubscribed(self, user_id: str) -> None:
         """Mark that we no longer track device lists for remote user."""
 
-        def _mark_remote_user_device_list_as_unsubscribed_txn(txn):
+        def _mark_remote_user_device_list_as_unsubscribed_txn(
+            txn: LoggingTransaction,
+        ) -> None:
             self.db_pool.simple_delete_txn(
                 txn,
                 table="device_lists_remote_extremeties",
@@ -1004,7 +1009,7 @@ class DeviceWorkerStore(SQLBaseStore):
         )
 
     def _store_dehydrated_device_txn(
-        self, txn, user_id: str, device_id: str, device_data: str
+        self, txn: LoggingTransaction, user_id: str, device_id: str, device_data: str
     ) -> Optional[str]:
         old_device_id = self.db_pool.simple_select_one_onecol_txn(
             txn,
@@ -1081,7 +1086,7 @@ class DeviceWorkerStore(SQLBaseStore):
         """
         yesterday = self._clock.time_msec() - prune_age
 
-        def _prune_txn(txn):
+        def _prune_txn(txn: LoggingTransaction) -> None:
             # look for (user, destination) pairs which have an update older than
             # the cutoff.
             #
@@ -1204,8 +1209,10 @@ class DeviceBackgroundUpdateStore(SQLBaseStore):
             "drop_device_lists_outbound_last_success_non_unique_idx",
         )
 
-    async def _drop_device_list_streams_non_unique_indexes(self, progress, batch_size):
-        def f(conn):
+    async def _drop_device_list_streams_non_unique_indexes(
+        self, progress: JsonDict, batch_size: int
+    ) -> int:
+        def f(conn: LoggingDatabaseConnection) -> None:
             txn = conn.cursor()
             txn.execute("DROP INDEX IF EXISTS device_lists_remote_cache_id")
             txn.execute("DROP INDEX IF EXISTS device_lists_remote_extremeties_id")
@@ -1217,7 +1224,9 @@ class DeviceBackgroundUpdateStore(SQLBaseStore):
         )
         return 1
 
-    async def _remove_duplicate_outbound_pokes(self, progress, batch_size):
+    async def _remove_duplicate_outbound_pokes(
+        self, progress: JsonDict, batch_size: int
+    ) -> int:
         # for some reason, we have accumulated duplicate entries in
         # device_lists_outbound_pokes, which makes prune_outbound_device_list_pokes less
         # efficient.
@@ -1230,7 +1239,7 @@ class DeviceBackgroundUpdateStore(SQLBaseStore):
             {"stream_id": 0, "destination": "", "user_id": "", "device_id": ""},
         )
 
-        def _txn(txn):
+        def _txn(txn: LoggingTransaction) -> int:
             clause, args = make_tuple_comparison_clause(
                 [(x, last_row[x]) for x in KEY_COLS]
             )
@@ -1582,7 +1591,6 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
         self,
         user_id: str,
         device_ids: Collection[str],
-        hosts: Optional[Collection[str]],
         room_ids: Collection[str],
     ) -> Optional[int]:
         """Persist that a user's devices have been updated, and which hosts
@@ -1592,9 +1600,6 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
             user_id: The ID of the user whose device changed.
             device_ids: The IDs of any changed devices. If empty, this function will
                 return None.
-            hosts: The remote destinations that should be notified of the change. If
-                None then the set of hosts have *not* been calculated, and will be
-                calculated later by a background task.
             room_ids: The rooms that the user is in
 
         Returns:
@@ -1607,13 +1612,13 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
         context = get_active_span_text_map()
 
         def add_device_changes_txn(
-            txn, stream_ids_for_device_change, stream_ids_for_outbound_pokes
-        ):
+            txn: LoggingTransaction, stream_ids: List[int]
+        ) -> None:
             self._add_device_change_to_stream_txn(
                 txn,
                 user_id,
                 device_ids,
-                stream_ids_for_device_change,
+                stream_ids,
             )
 
             self._add_device_outbound_room_poke_txn(
@@ -1621,43 +1626,17 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
                 user_id,
                 device_ids,
                 room_ids,
-                stream_ids_for_device_change,
-                context,
-                hosts_have_been_calculated=hosts is not None,
-            )
-
-            # If the set of hosts to send to has not been calculated yet (and so
-            # `hosts` is None) or there are no `hosts` to send to, then skip
-            # trying to persist them to the DB.
-            if not hosts:
-                return
-
-            self._add_device_outbound_poke_to_stream_txn(
-                txn,
-                user_id,
-                device_ids,
-                hosts,
-                stream_ids_for_outbound_pokes,
+                stream_ids,
                 context,
             )
 
-        # `device_lists_stream` wants a stream ID per device update.
-        num_stream_ids = len(device_ids)
-
-        if hosts:
-            # `device_lists_outbound_pokes` wants a different stream ID for
-            # each row, which is a row per host per device update.
-            num_stream_ids += len(hosts) * len(device_ids)
-
-        async with self._device_list_id_gen.get_next_mult(num_stream_ids) as stream_ids:
-            stream_ids_for_device_change = stream_ids[: len(device_ids)]
-            stream_ids_for_outbound_pokes = stream_ids[len(device_ids) :]
-
+        async with self._device_list_id_gen.get_next_mult(
+            len(device_ids)
+        ) as stream_ids:
             await self.db_pool.runInteraction(
                 "add_device_change_to_stream",
                 add_device_changes_txn,
-                stream_ids_for_device_change,
-                stream_ids_for_outbound_pokes,
+                stream_ids,
             )
 
         return stream_ids[-1]
@@ -1667,8 +1646,8 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
         txn: LoggingTransaction,
         user_id: str,
         device_ids: Collection[str],
-        stream_ids: List[str],
-    ):
+        stream_ids: List[int],
+    ) -> None:
         txn.call_after(
             self._device_list_stream_cache.entity_has_changed,
             user_id,
@@ -1735,7 +1714,9 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
                     next(stream_id_iterator),
                     user_id,
                     device_id,
-                    False,
+                    not self.hs.is_mine_id(
+                        user_id
+                    ),  # We only need to send out update for *our* users
                     now,
                     encoded_context if whitelisted_homeserver(destination) else "{}",
                 )
@@ -1750,21 +1731,10 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
         user_id: str,
         device_ids: Iterable[str],
         room_ids: Collection[str],
-        stream_ids: List[str],
+        stream_ids: List[int],
         context: Dict[str, str],
-        hosts_have_been_calculated: bool,
     ) -> None:
-        """Record the user in the room has updated their device.
-
-        Args:
-            hosts_have_been_calculated: True if `device_lists_outbound_pokes`
-                has been updated already with the updates.
-        """
-
-        # We only need to convert to outbound pokes if they are our user.
-        converted_to_destinations = (
-            hosts_have_been_calculated or not self.hs.is_mine_id(user_id)
-        )
+        """Record the user in the room has updated their device."""
 
         encoded_context = json_encoder.encode(context)
 
@@ -1789,7 +1759,8 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
                     device_id,
                     room_id,
                     stream_id,
-                    converted_to_destinations,
+                    # We only need to calculate outbound pokes for local users
+                    not self.hs.is_mine_id(user_id),
                     encoded_context,
                 )
                 for room_id in room_ids
@@ -1815,9 +1786,21 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
             LIMIT ?
         """
 
-        def get_uncoverted_outbound_room_pokes_txn(txn):
+        def get_uncoverted_outbound_room_pokes_txn(
+            txn: LoggingTransaction,
+        ) -> List[Tuple[str, str, str, int, Optional[Dict[str, str]]]]:
             txn.execute(sql, (limit,))
-            return txn.fetchall()
+
+            return [
+                (
+                    user_id,
+                    device_id,
+                    room_id,
+                    stream_id,
+                    db_to_json(opentracing_context),
+                )
+                for user_id, device_id, room_id, stream_id, opentracing_context in txn
+            ]
 
         return await self.db_pool.runInteraction(
             "get_uncoverted_outbound_room_pokes", get_uncoverted_outbound_room_pokes_txn
@@ -1838,7 +1821,9 @@ class DeviceStore(DeviceWorkerStore, DeviceBackgroundUpdateStore):
         Marks the associated row in `device_lists_changes_in_room` as handled.
         """
 
-        def add_device_list_outbound_pokes_txn(txn, stream_ids: List[int]):
+        def add_device_list_outbound_pokes_txn(
+            txn: LoggingTransaction, stream_ids: List[int]
+        ) -> None:
             if hosts:
                 self._add_device_outbound_poke_to_stream_txn(
                     txn,

@@ -30,6 +30,7 @@ from typing import (
 
 from prometheus_client import Counter
 
+from synapse import event_auth
 from synapse.api.constants import (
     EventContentFields,
     EventTypes,
@@ -63,6 +64,7 @@ from synapse.replication.http.federation import (
 )
 from synapse.state import StateResolutionStore
 from synapse.storage.databases.main.events_worker import EventRedactBehaviour
+from synapse.storage.state import StateFilter
 from synapse.types import (
     PersistedEventPosition,
     RoomStreamToken,
@@ -103,7 +105,7 @@ class FederationEventHandler:
         self._event_creation_handler = hs.get_event_creation_handler()
         self._event_auth_handler = hs.get_event_auth_handler()
         self._message_handler = hs.get_message_handler()
-        self._action_generator = hs.get_action_generator()
+        self._bulk_push_rule_evaluator = hs.get_bulk_push_rule_evaluator()
         self._state_resolution_handler = hs.get_state_resolution_handler()
         # avoid a circular dependency by deferring execution here
         self._get_room_member_handler = hs.get_room_member_handler
@@ -475,7 +477,63 @@ class FederationEventHandler:
             # and discover that we do not have it.
             event.internal_metadata.proactively_send = False
 
-            return await self.persist_events_and_notify(room_id, [(event, context)])
+            stream_id_after_persist = await self.persist_events_and_notify(
+                room_id, [(event, context)]
+            )
+
+            # If we're joining the room again, check if there is new marker
+            # state indicating that there is new history imported somewhere in
+            # the DAG. Multiple markers can exist in the current state with
+            # unique state_keys.
+            #
+            # Do this after the state from the remote join was persisted (via
+            # `persist_events_and_notify`). Otherwise we can run into a
+            # situation where the create event doesn't exist yet in the
+            # `current_state_events`
+            for e in state:
+                await self._handle_marker_event(origin, e)
+
+            return stream_id_after_persist
+
+    async def update_state_for_partial_state_event(
+        self, destination: str, event: EventBase
+    ) -> None:
+        """Recalculate the state at an event as part of a de-partial-stating process
+
+        Args:
+            destination: server to request full state from
+            event: partial-state event to be de-partial-stated
+        """
+        logger.info("Updating state for %s", event.event_id)
+        with nested_logging_context(suffix=event.event_id):
+            # if we have all the event's prev_events, then we can work out the
+            # state based on their states. Otherwise, we request it from the destination
+            # server.
+            #
+            # This is the same operation as we do when we receive a regular event
+            # over federation.
+            state = await self._resolve_state_at_missing_prevs(destination, event)
+
+            # build a new state group for it if need be
+            context = await self._state_handler.compute_event_context(
+                event,
+                old_state=state,
+            )
+            if context.partial_state:
+                # this can happen if some or all of the event's prev_events still have
+                # partial state - ie, an event has an earlier stream_ordering than one
+                # or more of its prev_events, so we de-partial-state it before its
+                # prev_events.
+                #
+                # TODO(faster_joins): we probably need to be more intelligent, and
+                #    exclude partial-state prev_events from consideration
+                logger.warning(
+                    "%s still has partial state: can't de-partial-state it yet",
+                    event.event_id,
+                )
+                return
+            await self._store.update_state_for_partial_state_event(event, context)
+            self._state_store.notify_event_un_partial_stated(event.event_id)
 
     async def backfill(
         self, dest: str, room_id: str, limit: int, extremities: Collection[str]
@@ -820,7 +878,7 @@ class FederationEventHandler:
             evs = await self._store.get_events(
                 list(state_map.values()),
                 get_prev_content=False,
-                redact_behaviour=EventRedactBehaviour.AS_IS,
+                redact_behaviour=EventRedactBehaviour.as_is,
             )
             event_map.update(evs)
 
@@ -1188,6 +1246,14 @@ class FederationEventHandler:
             # Nothing to retrieve then (invalid marker)
             return
 
+        already_seen_insertion_event = await self._store.have_seen_event(
+            marker_event.room_id, insertion_event_id
+        )
+        if already_seen_insertion_event:
+            # No need to process a marker again if we have already seen the
+            # insertion event that it was pointing to
+            return
+
         logger.debug(
             "_handle_marker_event: backfilling insertion event %s", insertion_event_id
         )
@@ -1383,7 +1449,7 @@ class FederationEventHandler:
                 # we're not bothering about room state, so flag the event as an outlier.
                 event.internal_metadata.outlier = True
 
-                context = EventContext.for_outlier()
+                context = EventContext.for_outlier(self._storage)
                 try:
                     validate_event_for_room_version(room_version_obj, event)
                     check_auth_rules_for_event(room_version_obj, event, auth)
@@ -1460,7 +1526,11 @@ class FederationEventHandler:
             return context
 
         # now check auth against what we think the auth events *should* be.
-        prev_state_ids = await context.get_prev_state_ids()
+        event_types = event_auth.auth_types_for_event(event.room_version, event)
+        prev_state_ids = await context.get_prev_state_ids(
+            StateFilter.from_types(event_types)
+        )
+
         auth_events_ids = self._event_auth_handler.compute_auth_events(
             event, prev_state_ids, for_verification=True
         )
@@ -1834,10 +1904,10 @@ class FederationEventHandler:
         )
 
         return EventContext.with_state(
+            storage=self._storage,
             state_group=state_group,
             state_group_before_event=context.state_group_before_event,
-            current_state_ids=current_state_ids,
-            prev_state_ids=prev_state_ids,
+            state_delta_due_to_event=state_updates,
             prev_group=prev_group,
             delta_ids=state_updates,
             partial_state=context.partial_state,
@@ -1873,7 +1943,7 @@ class FederationEventHandler:
                     min_depth,
                 )
             else:
-                await self._action_generator.handle_push_actions_for_event(
+                await self._bulk_push_rule_evaluator.action_for_event_by_user(
                     event, context
                 )
 

@@ -69,10 +69,10 @@ class LoginRestServlet(RestServlet):
     SSO_TYPE = "m.login.sso"
     TOKEN_TYPE = "m.login.token"
     JWT_TYPE = "org.matrix.login.jwt"
-    JWT_TYPE_DEPRECATED = "m.login.jwt"
     APPSERVICE_TYPE = "m.login.application_service"
-    APPSERVICE_TYPE_UNSTABLE = "uk.half-shot.msc2778.login.application_service"
     REFRESH_TOKEN_PARAM = "refresh_token"
+    ACTION_LOGIN = "login"
+    ACTION_REGISTER = "register"
 
     def __init__(self, hs: "HomeServer"):
         super().__init__()
@@ -116,6 +116,8 @@ class LoginRestServlet(RestServlet):
             burst_count=self.hs.config.ratelimiting.rc_login_account.burst_count,
         )
 
+        self._registration_enabled = hs.config.registration.enable_registration
+
         # ensure the CAS/SAML/OIDC handlers are loaded on this worker instance.
         # The reason for this is to ensure that the auth_provider_ids are registered
         # with SsoHandler, which in turn ensures that the login/registration prometheus
@@ -126,7 +128,6 @@ class LoginRestServlet(RestServlet):
         flows: List[JsonDict] = []
         if self.jwt_enabled:
             flows.append({"type": LoginRestServlet.JWT_TYPE})
-            flows.append({"type": LoginRestServlet.JWT_TYPE_DEPRECATED})
 
         if self.cas_enabled:
             # we advertise CAS for backwards compat, though MSC1721 renamed it
@@ -155,8 +156,22 @@ class LoginRestServlet(RestServlet):
 
         flows.extend({"type": t} for t in self.auth_handler.get_supported_login_types())
 
-        flows.append({"type": LoginRestServlet.APPSERVICE_TYPE})
-        flows.append({"type": LoginRestServlet.APPSERVICE_TYPE_UNSTABLE})
+        # You can only login with app-service
+        flows.append(
+            {
+                "type": LoginRestServlet.APPSERVICE_TYPE,
+                "actions": [LoginRestServlet.ACTION_LOGIN],
+            }
+        )
+
+        actions: List[str] = [LoginRestServlet.ACTION_LOGIN]
+        if self._registration_enabled:
+            actions.append(LoginRestServlet.ACTION_REGISTER)
+
+        # Set actions for all flows if not already specified
+        for flow in flows:
+            if "actions" not in flow:
+                flow["actions"] = actions
 
         return 200, {"flows": flows}
 
@@ -175,15 +190,12 @@ class LoginRestServlet(RestServlet):
         )
 
         try:
-            if login_submission["type"] in (
-                LoginRestServlet.APPSERVICE_TYPE,
-                LoginRestServlet.APPSERVICE_TYPE_UNSTABLE,
-            ):
+            if login_submission["type"] == LoginRestServlet.APPSERVICE_TYPE:
                 appservice = self.auth.get_appservice_by_req(request)
 
                 if appservice.is_rate_limited():
                     await self._address_ratelimiter.ratelimit(
-                        None, request.getClientIP()
+                        None, request.getClientAddress().host
                     )
 
                 result = await self._do_appservice_login(
@@ -191,23 +203,29 @@ class LoginRestServlet(RestServlet):
                     appservice,
                     should_issue_refresh_token=should_issue_refresh_token,
                 )
-            elif self.jwt_enabled and (
-                login_submission["type"] == LoginRestServlet.JWT_TYPE
-                or login_submission["type"] == LoginRestServlet.JWT_TYPE_DEPRECATED
+            elif (
+                self.jwt_enabled
+                and login_submission["type"] == LoginRestServlet.JWT_TYPE
             ):
-                await self._address_ratelimiter.ratelimit(None, request.getClientIP())
+                await self._address_ratelimiter.ratelimit(
+                    None, request.getClientAddress().host
+                )
                 result = await self._do_jwt_login(
                     login_submission,
                     should_issue_refresh_token=should_issue_refresh_token,
                 )
             elif login_submission["type"] == LoginRestServlet.TOKEN_TYPE:
-                await self._address_ratelimiter.ratelimit(None, request.getClientIP())
+                await self._address_ratelimiter.ratelimit(
+                    None, request.getClientAddress().host
+                )
                 result = await self._do_token_login(
                     login_submission,
                     should_issue_refresh_token=should_issue_refresh_token,
                 )
             else:
-                await self._address_ratelimiter.ratelimit(None, request.getClientIP())
+                await self._address_ratelimiter.ratelimit(
+                    None, request.getClientAddress().host
+                )
                 result = await self._do_other_login(
                     login_submission,
                     should_issue_refresh_token=should_issue_refresh_token,
@@ -342,6 +360,15 @@ class LoginRestServlet(RestServlet):
             user_id = canonical_uid
 
         device_id = login_submission.get("device_id")
+
+        # If device_id is present, check that device_id is not longer than a reasonable 512 characters
+        if device_id and len(device_id) > 512:
+            raise LoginError(
+                400,
+                "device_id cannot be longer than 512 characters.",
+                errcode=Codes.INVALID_PARAM,
+            )
+
         initial_display_name = login_submission.get("initial_device_display_name")
         (
             device_id,

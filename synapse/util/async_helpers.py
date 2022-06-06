@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import abc
+import asyncio
 import collections
 import inspect
 import itertools
@@ -25,6 +26,7 @@ from typing import (
     Awaitable,
     Callable,
     Collection,
+    Coroutine,
     Dict,
     Generic,
     Hashable,
@@ -40,7 +42,7 @@ from typing import (
 )
 
 import attr
-from typing_extensions import AsyncContextManager, Literal
+from typing_extensions import AsyncContextManager, Concatenate, Literal, ParamSpec
 
 from twisted.internet import defer
 from twisted.internet.defer import CancelledError
@@ -235,9 +237,16 @@ async def concurrently_execute(
     )
 
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
 async def yieldable_gather_results(
-    func: Callable[..., Awaitable[T]], iter: Iterable, *args: Any, **kwargs: Any
-) -> List[T]:
+    func: Callable[Concatenate[T, P], Awaitable[R]],
+    iter: Iterable[T],
+    *args: P.args,
+    **kwargs: P.kwargs,
+) -> List[R]:
     """Executes the function with each argument concurrently.
 
     Args:
@@ -253,7 +262,15 @@ async def yieldable_gather_results(
     try:
         return await make_deferred_yieldable(
             defer.gatherResults(
-                [run_in_background(func, item, *args, **kwargs) for item in iter],
+                # type-ignore: mypy reports two errors:
+                # error: Argument 1 to "run_in_background" has incompatible type
+                #     "Callable[[T, **P], Awaitable[R]]"; expected
+                #     "Callable[[T, **P], Awaitable[R]]"  [arg-type]
+                # error: Argument 2 to "run_in_background" has incompatible type
+                #     "T"; expected "[T, **P.args]"  [arg-type]
+                # The former looks like a mypy bug, and the latter looks like a
+                # false positive.
+                [run_in_background(func, item, *args, **kwargs) for item in iter],  # type: ignore[arg-type]
                 consumeErrors=True,
             )
         )
@@ -575,9 +592,6 @@ class ReadWriteLock:
         return _ctx_manager()
 
 
-R = TypeVar("R")
-
-
 def timeout_deferred(
     deferred: "defer.Deferred[_T]", timeout: float, reactor: IReactorTime
 ) -> "defer.Deferred[_T]":
@@ -701,26 +715,56 @@ def stop_cancellation(deferred: "defer.Deferred[T]") -> "defer.Deferred[T]":
     return new_deferred
 
 
-def delay_cancellation(deferred: "defer.Deferred[T]") -> "defer.Deferred[T]":
-    """Delay cancellation of a `Deferred` until it resolves.
+@overload
+def delay_cancellation(awaitable: "defer.Deferred[T]") -> "defer.Deferred[T]":
+    ...
+
+
+@overload
+def delay_cancellation(awaitable: Coroutine[Any, Any, T]) -> "defer.Deferred[T]":
+    ...
+
+
+@overload
+def delay_cancellation(awaitable: Awaitable[T]) -> Awaitable[T]:
+    ...
+
+
+def delay_cancellation(awaitable: Awaitable[T]) -> Awaitable[T]:
+    """Delay cancellation of a coroutine or `Deferred` awaitable until it resolves.
 
     Has the same effect as `stop_cancellation`, but the returned `Deferred` will not
-    resolve with a `CancelledError` until the original `Deferred` resolves.
+    resolve with a `CancelledError` until the original awaitable resolves.
 
     Args:
-        deferred: The `Deferred` to protect against cancellation. May optionally follow
-            the Synapse logcontext rules.
+        deferred: The coroutine or `Deferred` to protect against cancellation. May
+            optionally follow the Synapse logcontext rules.
 
     Returns:
-        A new `Deferred`, which will contain the result of the original `Deferred`.
-        The new `Deferred` will not propagate cancellation through to the original.
-        When cancelled, the new `Deferred` will wait until the original `Deferred`
-        resolves before failing with a `CancelledError`.
+        A new `Deferred`, which will contain the result of the original coroutine or
+        `Deferred`. The new `Deferred` will not propagate cancellation through to the
+        original coroutine or `Deferred`.
 
-        The new `Deferred` will follow the Synapse logcontext rules if `deferred`
+        When cancelled, the new `Deferred` will wait until the original coroutine or
+        `Deferred` resolves before failing with a `CancelledError`.
+
+        The new `Deferred` will follow the Synapse logcontext rules if `awaitable`
         follows the Synapse logcontext rules. Otherwise the new `Deferred` should be
         wrapped with `make_deferred_yieldable`.
     """
+
+    # First, convert the awaitable into a `Deferred`.
+    if isinstance(awaitable, defer.Deferred):
+        deferred = awaitable
+    elif asyncio.iscoroutine(awaitable):
+        # Ideally we'd use `Deferred.fromCoroutine()` here, to save on redundant
+        # type-checking, but we'd need Twisted >= 21.2.
+        deferred = defer.ensureDeferred(awaitable)
+    else:
+        # We have no idea what to do with this awaitable.
+        # We assume it's already resolved, such as `DoneAwaitable`s or `Future`s from
+        # `make_awaitable`, and let the caller `await` it normally.
+        return awaitable
 
     def handle_cancel(new_deferred: "defer.Deferred[T]") -> None:
         # before the new deferred is cancelled, we `pause` it to stop the cancellation
@@ -734,3 +778,60 @@ def delay_cancellation(deferred: "defer.Deferred[T]") -> "defer.Deferred[T]":
     new_deferred: "defer.Deferred[T]" = defer.Deferred(handle_cancel)
     deferred.chainDeferred(new_deferred)
     return new_deferred
+
+
+class AwakenableSleeper:
+    """Allows explicitly waking up deferreds related to an entity that are
+    currently sleeping.
+    """
+
+    def __init__(self, reactor: IReactorTime) -> None:
+        self._streams: Dict[str, Set[defer.Deferred[None]]] = {}
+        self._reactor = reactor
+
+    def wake(self, name: str) -> None:
+        """Wake everything related to `name` that is currently sleeping."""
+        stream_set = self._streams.pop(name, set())
+        for deferred in stream_set:
+            try:
+                with PreserveLoggingContext():
+                    deferred.callback(None)
+            except Exception:
+                pass
+
+    async def sleep(self, name: str, delay_ms: int) -> None:
+        """Sleep for the given number of milliseconds, or return if the given
+        `name` is explicitly woken up.
+        """
+
+        # Create a deferred that gets called in N seconds
+        sleep_deferred: "defer.Deferred[None]" = defer.Deferred()
+        call = self._reactor.callLater(delay_ms / 1000, sleep_deferred.callback, None)
+
+        # Create a deferred that will get called if `wake` is called with
+        # the same `name`.
+        stream_set = self._streams.setdefault(name, set())
+        notify_deferred: "defer.Deferred[None]" = defer.Deferred()
+        stream_set.add(notify_deferred)
+
+        try:
+            # Wait for either the delay or for `wake` to be called.
+            await make_deferred_yieldable(
+                defer.DeferredList(
+                    [sleep_deferred, notify_deferred],
+                    fireOnOneCallback=True,
+                    fireOnOneErrback=True,
+                    consumeErrors=True,
+                )
+            )
+        finally:
+            # Clean up the state
+            curr_stream_set = self._streams.get(name)
+            if curr_stream_set is not None:
+                curr_stream_set.discard(notify_deferred)
+                if len(curr_stream_set) == 0:
+                    self._streams.pop(name)
+
+            # Cancel the sleep if we were woken up
+            if call.active():
+                call.cancel()

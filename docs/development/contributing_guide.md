@@ -48,19 +48,28 @@ can find many good git tutorials on the web.
 
 # 4. Install the dependencies
 
-Once you have installed Python 3 and added the source, please open a terminal and
-setup a *virtualenv*, as follows:
+Synapse uses the [poetry](https://python-poetry.org/) project to manage its dependencies
+and development environment. Once you have installed Python 3 and added the
+source, you should install `poetry`.
+Of their installation methods, we recommend
+[installing `poetry` using `pipx`](https://python-poetry.org/docs/#installing-with-pipx),
+
+```shell
+pip install --user pipx
+pipx install poetry
+```
+
+but see poetry's [installation instructions](https://python-poetry.org/docs/#installation)
+for other installation methods.
+
+Next, open a terminal and install dependencies as follows:
 
 ```sh
 cd path/where/you/have/cloned/the/repository
-python3 -m venv ./env
-source ./env/bin/activate
-pip install wheel
-pip install -e ".[all,dev]"
-pip install tox
+poetry install --extras all
 ```
 
-This will install the developer dependencies for the project.
+This will install the runtime and developer dependencies for the project.
 
 
 # 5. Get in touch.
@@ -117,11 +126,10 @@ The linters look at your code and do two things:
 - ensure that your code follows the coding style adopted by the project;
 - catch a number of errors in your code.
 
-The linter takes no time at all to run as soon as you've [downloaded the dependencies into your python virtual environment](#4-install-the-dependencies).
+The linter takes no time at all to run as soon as you've [downloaded the dependencies](#4-install-the-dependencies).
 
 ```sh
-source ./env/bin/activate
-./scripts-dev/lint.sh
+poetry run ./scripts-dev/lint.sh
 ```
 
 Note that this script *will modify your files* to fix styling errors.
@@ -131,15 +139,13 @@ If you wish to restrict the linters to only the files changed since the last com
 (much faster!), you can instead run:
 
 ```sh
-source ./env/bin/activate
-./scripts-dev/lint.sh -d
+poetry run ./scripts-dev/lint.sh -d
 ```
 
 Or if you know exactly which files you wish to lint, you can instead run:
 
 ```sh
-source ./env/bin/activate
-./scripts-dev/lint.sh path/to/file1.py path/to/file2.py path/to/folder
+poetry run ./scripts-dev/lint.sh path/to/file1.py path/to/file2.py path/to/folder
 ```
 
 ## Run the unit tests (Twisted trial).
@@ -148,16 +154,14 @@ The unit tests run parts of Synapse, including your changes, to see if anything
 was broken. They are slower than the linters but will typically catch more errors.
 
 ```sh
-source ./env/bin/activate
-trial tests
+poetry run trial tests
 ```
 
 If you wish to only run *some* unit tests, you may specify
 another module instead of `tests` - or a test class or a method:
 
 ```sh
-source ./env/bin/activate
-trial tests.rest.admin.test_room tests.handlers.test_admin.ExfiltrateData.test_invite
+poetry run trial tests.rest.admin.test_room tests.handlers.test_admin.ExfiltrateData.test_invite
 ```
 
 If your tests fail, you may wish to look at the logs (the default log level is `ERROR`):
@@ -169,7 +173,7 @@ less _trial_temp/test.log
 To increase the log level for the tests, set `SYNAPSE_TEST_LOG_LEVEL`:
 
 ```sh
-SYNAPSE_TEST_LOG_LEVEL=DEBUG trial tests
+SYNAPSE_TEST_LOG_LEVEL=DEBUG poetry run trial tests
 ```
 
 By default, tests will use an in-memory SQLite database for test data. For additional
@@ -180,7 +184,7 @@ database state to be stored in a file named `test.db` under the trial process'
 working directory. Typically, this ends up being `_trial_temp/test.db`. For example:
 
 ```sh
-SYNAPSE_TEST_PERSIST_SQLITE_DB=1 trial tests
+SYNAPSE_TEST_PERSIST_SQLITE_DB=1 poetry run trial tests
 ```
 
 The database file can then be inspected with:
@@ -202,7 +206,32 @@ This means that we need to run our unit tests against PostgreSQL too. Our CI doe
 this automatically for pull requests and release candidates, but it's sometimes
 useful to reproduce this locally.
 
-To do so, [configure Postgres](../postgres.md) and run `trial` with the
+#### Using Docker
+
+The easiest way to do so is to run Postgres via a docker container. In one
+terminal:
+
+```shell
+docker run --rm -e POSTGRES_PASSWORD=mysecretpassword -e POSTGRES_USER=postgres -e POSTGRES_DB=postgress -p 5432:5432 postgres:14
+```
+
+If you see an error like
+
+```
+docker: Error response from daemon: driver failed programming external connectivity on endpoint nice_ride (b57bbe2e251b70015518d00c9981e8cb8346b5c785250341a6c53e3c899875f1): Error starting userland proxy: listen tcp4 0.0.0.0:5432: bind: address already in use.
+```
+
+then something is already bound to port 5432. You're probably already running postgres locally.
+
+Once you have a postgres server running, invoke `trial` in a second terminal:
+
+```shell
+SYNAPSE_POSTGRES=1 SYNAPSE_POSTGRES_HOST=127.0.0.1 SYNAPSE_POSTGRES_USER=postgres SYNAPSE_POSTGRES_PASSWORD=mysecretpassword poetry run trial tests
+````
+
+#### Using an existing Postgres installation
+
+If you have postgres already installed on your system, you can run `trial` with the
 following environment variables matching your configuration:
 
 - `SYNAPSE_POSTGRES` to anything nonempty
@@ -225,8 +254,8 @@ You don't need to specify the host, user, port or password if your Postgres
 server is set to authenticate you over the UNIX socket (i.e. if the `psql` command
 works without further arguments).
 
-Your Postgres account needs to be able to create databases.
-
+Your Postgres account needs to be able to create databases; see the postgres
+docs for [`ALTER ROLE`](https://www.postgresql.org/docs/current/sql-alterrole.html).
 
 ## Run the integration tests ([Sytest](https://github.com/matrix-org/sytest)).
 
@@ -266,13 +295,13 @@ COMPLEMENT_DIR=../complement ./scripts-dev/complement.sh
 To run a specific test file, you can pass the test name at the end of the command. The name passed comes from the naming structure in your Complement tests. If you're unsure of the name, you can do a full run and copy it from the test output:
 
 ```sh
-COMPLEMENT_DIR=../complement ./scripts-dev/complement.sh TestBackfillingHistory
+COMPLEMENT_DIR=../complement ./scripts-dev/complement.sh -run TestImportHistoricalMessages
 ```
 
 To run a specific test, you can specify the whole name structure:
 
 ```sh
-COMPLEMENT_DIR=../complement ./scripts-dev/complement.sh TestBackfillingHistory/parallel/Backfilled_historical_events_resolve_with_proper_state_in_correct_order
+COMPLEMENT_DIR=../complement ./scripts-dev/complement.sh -run TestImportHistoricalMessages/parallel/Historical_events_resolve_in_the_correct_order
 ```
 
 
@@ -393,8 +422,8 @@ same lightweight approach that the Linux Kernel
 [submitting patches process](
 https://www.kernel.org/doc/html/latest/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin>),
 [Docker](https://github.com/docker/docker/blob/master/CONTRIBUTING.md), and many other
-projects use: the DCO (Developer Certificate of Origin:
-http://developercertificate.org/). This is a simple declaration that you wrote
+projects use: the DCO ([Developer Certificate of Origin](http://developercertificate.org/)).
+This is a simple declaration that you wrote
 the contribution or otherwise have the right to contribute it to Matrix:
 
 ```

@@ -17,6 +17,7 @@
 # Usage
   - [Federation](federate.md)
   - [Configuration](usage/configuration/README.md)
+    - [Configuration Manual](usage/configuration/config_documentation.md) 
     - [Homeserver Sample Config File](usage/configuration/homeserver_sample_config.md)
     - [Logging Sample Config File](usage/configuration/logging_sample_config.md)
     - [Structured Logging](structured_logging.md)
@@ -88,6 +89,7 @@
   - [Database Schemas](development/database_schema.md)
   - [Experimental features](development/experimental_features.md)
   - [Synapse Architecture]()
+    - [Cancellation](development/synapse_architecture/cancellation.md)
     - [Log Contexts](log_contexts.md)
     - [Replication](replication.md)
     - [TCP Replication](tcp_replication.md)

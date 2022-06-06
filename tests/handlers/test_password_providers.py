@@ -17,8 +17,6 @@
 from typing import Any, Type, Union
 from unittest.mock import Mock
 
-from twisted.internet import defer
-
 import synapse
 from synapse.api.constants import LoginType
 from synapse.api.errors import Codes
@@ -32,11 +30,9 @@ from tests.server import FakeChannel
 from tests.test_utils import make_awaitable
 from tests.unittest import override_config
 
-# (possibly experimental) login flows we expect to appear in the list after the normal
-# ones
+# Login flows we expect to appear in the list after the normal ones.
 ADDITIONAL_LOGIN_FLOWS = [
-    {"type": "m.login.application_service"},
-    {"type": "uk.half-shot.msc2778.login.application_service"},
+    {"type": "m.login.application_service", "actions": ["login"]},
 ]
 
 # a mock instance which the dummy auth providers delegate to, so we can see what's going
@@ -187,10 +183,14 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
     def password_only_auth_provider_login_test_body(self):
         # login flows should only have m.login.password
         flows = self._get_login_flows()
-        self.assertEqual(flows, [{"type": "m.login.password"}] + ADDITIONAL_LOGIN_FLOWS)
+        self.assertEqual(
+            flows,
+            [{"type": "m.login.password", "actions": ["login", "register"]}]
+            + ADDITIONAL_LOGIN_FLOWS,
+        )
 
         # check_password must return an awaitable
-        mock_password_provider.check_password.return_value = defer.succeed(True)
+        mock_password_provider.check_password.return_value = make_awaitable(True)
         channel = self._send_password_login("u", "p")
         self.assertEqual(channel.code, 200, channel.result)
         self.assertEqual("@u:test", channel.json_body["user_id"])
@@ -226,13 +226,13 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.get_success(module_api.register_user("u"))
 
         # log in twice, to get two devices
-        mock_password_provider.check_password.return_value = defer.succeed(True)
+        mock_password_provider.check_password.return_value = make_awaitable(True)
         tok1 = self.login("u", "p")
         self.login("u", "p", device_id="dev2")
         mock_password_provider.reset_mock()
 
         # have the auth provider deny the request to start with
-        mock_password_provider.check_password.return_value = defer.succeed(False)
+        mock_password_provider.check_password.return_value = make_awaitable(False)
 
         # make the initial request which returns a 401
         session = self._start_delete_device_session(tok1, "dev2")
@@ -246,7 +246,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         mock_password_provider.reset_mock()
 
         # Finally, check the request goes through when we allow it
-        mock_password_provider.check_password.return_value = defer.succeed(True)
+        mock_password_provider.check_password.return_value = make_awaitable(True)
         channel = self._authed_delete_device(tok1, "dev2", session, "u", "p")
         self.assertEqual(channel.code, 200)
         mock_password_provider.check_password.assert_called_once_with("@u:test", "p")
@@ -260,7 +260,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         # check_password must return an awaitable
-        mock_password_provider.check_password.return_value = defer.succeed(False)
+        mock_password_provider.check_password.return_value = make_awaitable(False)
         channel = self._send_password_login("u", "p")
         self.assertEqual(channel.code, 403, channel.result)
 
@@ -277,7 +277,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         # have the auth provider deny the request
-        mock_password_provider.check_password.return_value = defer.succeed(False)
+        mock_password_provider.check_password.return_value = make_awaitable(False)
 
         # log in twice, to get two devices
         tok1 = self.login("localuser", "localpass")
@@ -320,7 +320,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         # check_password must return an awaitable
-        mock_password_provider.check_password.return_value = defer.succeed(False)
+        mock_password_provider.check_password.return_value = make_awaitable(False)
         channel = self._send_password_login("localuser", "localpass")
         self.assertEqual(channel.code, 403)
         self.assertEqual(channel.json_body["errcode"], "M_FORBIDDEN")
@@ -342,7 +342,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         # allow login via the auth provider
-        mock_password_provider.check_password.return_value = defer.succeed(True)
+        mock_password_provider.check_password.return_value = make_awaitable(True)
 
         # log in twice, to get two devices
         tok1 = self.login("localuser", "p")
@@ -359,7 +359,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         mock_password_provider.check_password.assert_not_called()
 
         # now try deleting with the local password
-        mock_password_provider.check_password.return_value = defer.succeed(False)
+        mock_password_provider.check_password.return_value = make_awaitable(False)
         channel = self._authed_delete_device(
             tok1, "dev2", session, "localuser", "localpass"
         )
@@ -404,7 +404,10 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         flows = self._get_login_flows()
         self.assertEqual(
             flows,
-            [{"type": "m.login.password"}, {"type": "test.login_type"}]
+            [
+                {"type": "m.login.password", "actions": ["login", "register"]},
+                {"type": "test.login_type", "actions": ["login", "register"]},
+            ]
             + ADDITIONAL_LOGIN_FLOWS,
         )
 
@@ -413,7 +416,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.assertEqual(channel.code, 400, channel.result)
         mock_password_provider.check_auth.assert_not_called()
 
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@user:bz", None)
         )
         channel = self._send_login("test.login_type", "u", test_field="y")
@@ -427,7 +430,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         # try a weird username. Again, it's unclear what we *expect* to happen
         # in these cases, but at least we can guard against the API changing
         # unexpectedly
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@ MALFORMED! :bz", None)
         )
         channel = self._send_login("test.login_type", " USER🙂NAME ", test_field=" abc ")
@@ -477,7 +480,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         mock_password_provider.reset_mock()
 
         # right params, but authing as the wrong user
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@user:bz", None)
         )
         body["auth"]["test_field"] = "foo"
@@ -490,7 +493,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         mock_password_provider.reset_mock()
 
         # and finally, succeed
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@localuser:test", None)
         )
         channel = self._delete_device(tok1, "dev2", body)
@@ -508,9 +511,9 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.custom_auth_provider_callback_test_body()
 
     def custom_auth_provider_callback_test_body(self):
-        callback = Mock(return_value=defer.succeed(None))
+        callback = Mock(return_value=make_awaitable(None))
 
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@user:bz", callback)
         )
         channel = self._send_login("test.login_type", "u", test_field="y")
@@ -549,7 +552,11 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         flows = self._get_login_flows()
-        self.assertEqual(flows, [{"type": "test.login_type"}] + ADDITIONAL_LOGIN_FLOWS)
+        self.assertEqual(
+            flows,
+            [{"type": "test.login_type", "actions": ["login", "register"]}]
+            + ADDITIONAL_LOGIN_FLOWS,
+        )
 
         # login shouldn't work and should be rejected with a 400 ("unknown login type")
         channel = self._send_password_login("localuser", "localpass")
@@ -584,7 +591,11 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         flows = self._get_login_flows()
-        self.assertEqual(flows, [{"type": "test.login_type"}] + ADDITIONAL_LOGIN_FLOWS)
+        self.assertEqual(
+            flows,
+            [{"type": "test.login_type", "actions": ["login", "register"]}]
+            + ADDITIONAL_LOGIN_FLOWS,
+        )
 
         # login shouldn't work and should be rejected with a 400 ("unknown login type")
         channel = self._send_password_login("localuser", "localpass")
@@ -615,7 +626,11 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         flows = self._get_login_flows()
-        self.assertEqual(flows, [{"type": "test.login_type"}] + ADDITIONAL_LOGIN_FLOWS)
+        self.assertEqual(
+            flows,
+            [{"type": "test.login_type", "actions": ["login", "register"]}]
+            + ADDITIONAL_LOGIN_FLOWS,
+        )
 
         # login shouldn't work and should be rejected with a 400 ("unknown login type")
         channel = self._send_password_login("localuser", "localpass")
@@ -646,7 +661,7 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         login is disabled"""
         # register the user and log in twice via the test login type to get two devices,
         self.register_user("localuser", "localpass")
-        mock_password_provider.check_auth.return_value = defer.succeed(
+        mock_password_provider.check_auth.return_value = make_awaitable(
             ("@localuser:test", None)
         )
         channel = self._send_login("test.login_type", "localuser", test_field="")
@@ -720,7 +735,11 @@ class PasswordAuthProviderTests(unittest.HomeserverTestCase):
         self.register_user("localuser", "localpass")
 
         flows = self._get_login_flows()
-        self.assertEqual(flows, [{"type": "test.login_type"}] + ADDITIONAL_LOGIN_FLOWS)
+        self.assertEqual(
+            flows,
+            [{"type": "test.login_type", "actions": ["login", "register"]}]
+            + ADDITIONAL_LOGIN_FLOWS,
+        )
 
         # password login shouldn't work and should be rejected with a 400
         # ("unknown login type")

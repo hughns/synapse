@@ -31,6 +31,18 @@ class AuthConfig(Config):
         if password_config is None:
             password_config = {}
 
+        passwords_enabled = password_config.get("enabled", True)
+        # 'only_for_reauth' allows users who have previously set a password to use it,
+        # even though passwords would otherwise be disabled.
+        passwords_for_reauth_only = passwords_enabled == "only_for_reauth"
+
+        self.password_enabled_for_login = (
+            passwords_enabled and not passwords_for_reauth_only
+        )
+        self.password_enabled_for_reauth = (
+            passwords_for_reauth_only or passwords_enabled
+        )
+
         self.password_localdb_enabled = password_config.get("localdb_enabled", True)
         self.password_pepper = password_config.get("pepper", "")
 
@@ -47,6 +59,7 @@ class AuthConfig(Config):
         oauth_delegation = config.get("oauth_delegation", {})
         self.oauth_delegation_enabled = oauth_delegation.get("enabled", False)
         self.oauth_delegation_issuer = oauth_delegation.get("issuer", "")
+        self.oauth_delegation_issuer_metadata = oauth_delegation.get("issuer_metadata")
         self.oauth_delegation_account = oauth_delegation.get("account", "")
         self.oauth_delegation_client_id = oauth_delegation.get("client_id", "")
         self.oauth_delegation_client_secret = oauth_delegation.get("client_secret", "")
@@ -70,7 +83,9 @@ class AuthConfig(Config):
     def generate_config_section(self, **kwargs: Any) -> str:
         return """\
         password_config:
-           # Uncomment to disable password login
+           # Uncomment to disable password login.
+           # Set to `only_for_reauth` to permit reauthentication for users that
+           # have passwords and are already logged in.
            #
            #enabled: false
 

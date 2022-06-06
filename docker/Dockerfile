@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Dockerfile to build the matrixdotorg/synapse docker images.
 #
 # Note that it uses features which are only available in BuildKit - see
@@ -54,12 +55,12 @@ RUN \
 # NB: In poetry 1.2 `poetry export` will be moved into a plugin; we'll need to also
 # pip install poetry-plugin-export (https://github.com/python-poetry/poetry-plugin-export).
 RUN --mount=type=cache,target=/root/.cache/pip \
-  pip install --user git+https://github.com/python-poetry/poetry.git@fb13b3a676f476177f7937ffa480ee5cff9a90a5
+  pip install --user "poetry-core==1.1.0a7" "git+https://github.com/python-poetry/poetry.git@fb13b3a676f476177f7937ffa480ee5cff9a90a5"
 
 WORKDIR /synapse
 
 # Copy just what we need to run `poetry export`...
-COPY pyproject.toml poetry.lock README.rst /synapse/
+COPY pyproject.toml poetry.lock /synapse/
 
 RUN /root/.local/bin/poetry export --extras all -o /synapse/requirements.txt
 
@@ -98,9 +99,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy over the rest of the synapse source code.
 COPY synapse /synapse/synapse/
 # ... and what we need to `pip install`.
-# TODO: once pyproject.toml declares poetry-core as its build system, we'll need to copy
-# pyproject.toml here, ditching setup.py and MANIFEST.in.
-COPY setup.py MANIFEST.in README.rst /synapse/
+COPY pyproject.toml README.rst /synapse/
 
 # Install the synapse package itself.
 RUN pip install --prefix="/install" --no-deps --no-warn-script-location /synapse
