@@ -45,12 +45,12 @@ class WellKnownBuilder:
             }
 
         if self._config.auth.oauth_delegation_enabled:
-            result["m.authentication"] = {
+            result["org.matrix.msc2965.authentication"] = {
                 "issuer": self._config.auth.oauth_delegation_issuer
             }
 
             if (self._config.auth.oauth_delegation_account != ""):
-                result["m.authentication"]["account"] = self._config.auth.oauth_delegation_account
+                result["org.matrix.msc2965.authentication"]["account"] = self._config.auth.oauth_delegation_account
 
         return result
 
